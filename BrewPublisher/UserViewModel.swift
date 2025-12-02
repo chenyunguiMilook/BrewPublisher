@@ -68,7 +68,7 @@ class PublishViewModel: ObservableObject {
     @Published var logs: [String] = []
     
     @Published var brewType: BrewType = .cask
-
+    private let metadataService = PackageMetadataService()
     private let service = GitHubService()
     
     func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -96,11 +96,48 @@ class PublishViewModel: ObservableObject {
     // 内部辅助函数：验证并处理文件
     private func processDroppedFile(_ url: URL) {
         DispatchQueue.main.async {
-            // 3. 在这里检查扩展名是否为 zip
+            // 1. 基本检查
             if url.pathExtension.lowercased() == "zip" {
                 self.selectedFileURL = url
-                self.autoFillInfo(from: url)
                 self.log("📦 已加载文件: \(url.lastPathComponent)")
+                
+                // 2. 开始解析元数据 (这是一个异步操作)
+                Task {
+                    self.log("🔍 正在分析 App 元数据...")
+                    let metadata = await self.metadataService.extractMetadata(from: url)
+                    
+                    await MainActor.run {
+                        // 3. 自动填入版本号
+                        if let ver = metadata.version {
+                            self.version = ver
+                            self.log("✅ 识别到版本号: \(ver)")
+                        } else {
+                            self.log("⚠️ 未能识别版本号，请手动填写")
+                        }
+                        
+                        // 4. 自动填入 App 名称 (如果还没填的话，或者想强制覆盖)
+                        if let name = metadata.name {
+                            // 简单的处理：转小写，去空格
+                            let formattedName = name.lowercased().replacingOccurrences(of: " ", with: "")
+                            
+                            // 只有当用户还没填，或者填的是默认值时才覆盖，避免覆盖用户已修改的内容
+                            if self.appName.isEmpty {
+                                self.appName = formattedName
+                                self.log("✅ 识别到应用名: \(formattedName)")
+                            }
+                        }
+                        
+                        // 5. 尝试根据 Bundle ID 推断 Repo 名称 (可选优化)
+                        // 比如 com.google.chrome -> chrome
+                        if let bundleId = metadata.bundleId, self.appName.isEmpty {
+                            let lastPart = bundleId.components(separatedBy: ".").last ?? ""
+                            if !lastPart.isEmpty {
+                                self.appName = lastPart
+                            }
+                        }
+                    }
+                }
+                
             } else {
                 self.log("⚠️ 只能识别 .zip 文件，你拖入的是: .\(url.pathExtension)")
             }
