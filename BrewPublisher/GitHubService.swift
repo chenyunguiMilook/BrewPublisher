@@ -59,9 +59,11 @@ class GitHubService {
     }
     
     // 3. 更新或创建 Formula 文件
-    func updateFormula(token: String, tapRepo: String, formulaName: String, content: String) async throws {
-        let path = "Formula/\(formulaName).rb"
+    func updateFile(token: String, tapRepo: String, path: String, content: String, message: String) async throws {
+        // 注意：这里 urlString 变了，不再拼接 "Formula/"，而是直接用传入的 path
+        // path 可能是 "Formula/myapp.rb" 也可能是 "Casks/myapp.rb"
         let urlString = "https://api.github.com/repos/\(tapRepo)/contents/\(path)"
+        
         guard let url = URL(string: urlString) else { throw BrewError.invalidURL }
         
         // 3.1 检查文件是否存在以获取 SHA (如果存在)
@@ -85,7 +87,7 @@ class GitHubService {
         let contentBase64 = content.data(using: .utf8)?.base64EncodedString() ?? ""
         
         var body: [String: Any] = [
-            "message": "Update \(formulaName) via BrewPublisher",
+            "message": message, // message 也参数化
             "content": contentBase64
         ]
         

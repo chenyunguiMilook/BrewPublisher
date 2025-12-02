@@ -80,6 +80,14 @@ struct ProjectPanelView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(title: "GitHub Repositories")
                         
+                        Picker("Release Type", selection: $publishVM.brewType) {
+                            ForEach(PublishViewModel.BrewType.allCases, id: \.self) { type in
+                                Text(type.rawValue).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented) // 分段控制器样式，很好看
+                        .padding(.vertical, 5)
+                        
                         // Source Repo
                         HStack {
                             LabelText("Source Repo")

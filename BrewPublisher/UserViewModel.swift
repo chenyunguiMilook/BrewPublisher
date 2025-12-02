@@ -49,6 +49,11 @@ class UserViewModel: ObservableObject {
 // MARK: - 发布任务管理
 @MainActor
 class PublishViewModel: ObservableObject {
+    enum BrewType: String, CaseIterable {
+        case cask = "macOS App (Cask)"
+        case formula = "CLI Tool (Formula)"
+    }
+
     // 项目表单
     @Published var sourceRepoName: String = "" // 只填 repo 名，不带 user
     @Published var tapRepoName: String = "homebrew-tap" // 默认 tap
@@ -62,6 +67,8 @@ class PublishViewModel: ObservableObject {
     @Published var isProcessing: Bool = false
     @Published var logs: [String] = []
     
+    @Published var brewType: BrewType = .cask
+
     private let service = GitHubService()
     
     func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -158,27 +165,73 @@ class PublishViewModel: ObservableObject {
                 let asset = try await service.uploadAsset(token: token, uploadUrl: release.uploadUrl, fileUrl: fileUrl)
                 
                 // 5. Generate Formula (保持不变)
-                let classPrefix = appName.prefix(1).uppercased() + appName.dropFirst()
-                let formulaContent = """
-                class \(classPrefix) < Formula
-                  desc "\(description)"
-                  homepage "\(homepage)"
-                  url "\(asset.browserDownloadUrl)"
-                  version "\(version)"
-                  sha256 "\(hash)"
+                // 👇 修改核心逻辑：根据类型生成内容和路径
+                let content: String
+                let filePath: String
+                
+                if brewType == .formula {
+                    // 模式 A: Formula (CLI)
+                    let classPrefix = appName.prefix(1).uppercased() + appName.dropFirst() // Mytool
+                    content = """
+                    class \(classPrefix) < Formula
+                      desc "\(description)"
+                      homepage "\(homepage)"
+                      url "\(asset.browserDownloadUrl)"
+                      version "\(version)"
+                      sha256 "\(hash)"
 
-                  def install
-                    bin.install "\(appName)"
-                  end
-                end
-                """
+                      def install
+                        bin.install "\(appName)"
+                      end
+                    end
+                    """
+                    filePath = "Formula/\(appName).rb"
+                    
+                } else {
+                    // 模式 B: Cask (GUI App) -> 这是你现在需要的
+                    // Cask 的 token 通常是全小写，用横杠连接
+                    let caskToken = appName.lowercased().replacingOccurrences(of: " ", with: "-")
+                    
+                    content = """
+                    cask "\(caskToken)" do
+                      version "\(version)"
+                      sha256 "\(hash)"
+
+                      url "\(asset.browserDownloadUrl)"
+                      name "\(appName)"
+                      desc "\(description)"
+                      homepage "\(homepage)"
+
+                      auto_updates true
+                      depends_on macos: ">= :monterey"
+
+                      app "\(appName).app"
+                    end
+                    """
+                    filePath = "Casks/\(caskToken).rb"
+                }
                 
-                // 6. Update Tap
-                log("📝 更新 Tap Formula...")
-                try await service.updateFormula(token: token, tapRepo: fullTapRepo, formulaName: appName, content: formulaContent)
+                // 6. Update Repo
+                log("📝 正在更新文件: \(filePath)...")
                 
-                log("✅ 全部完成！发布成功！")
-                log("👉 安装命令: brew install \(fullTapRepo)/\(appName)")
+                // 调用修改后的 Service 方法
+                try await service.updateFile(
+                    token: token,
+                    tapRepo: fullTapRepo,
+                    path: filePath,
+                    content: content,
+                    message: "Update \(appName) to \(version) (\(brewType == .cask ? "Cask" : "Formula"))"
+                )
+                
+                log("✅ 发布成功！")
+                
+                // 提示安装命令
+                // 如果是 Cask，通常建议加 --cask 参数以防重名，虽然后来版本 brew 会自动识别
+                if brewType == .cask {
+                    log("👉 安装命令: brew install --cask \(fullTapRepo)/\(appName)")
+                } else {
+                    log("👉 安装命令: brew install \(fullTapRepo)/\(appName)")
+                }
 
             } catch {
                 log("❌ 错误: \(error.localizedDescription)")
