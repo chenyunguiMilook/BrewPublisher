@@ -101,6 +101,12 @@ class PublishViewModel: ObservableObject {
                 self.selectedFileURL = url
                 self.log("📦 已加载文件: \(url.lastPathComponent)")
                 
+                // 获取文件名（不带后缀），例如 "MyApp-1.0.zip" -> "MyApp-1.0"
+                let filenameWithoutExt = url.deletingPathExtension().lastPathComponent
+                
+                // 赋值给 Source Repo (建议把空格替换为横杠，因为 GitHub Repo 不支持空格)
+                self.sourceRepoName = filenameWithoutExt.replacingOccurrences(of: " ", with: "-")
+                
                 // 2. 开始解析元数据 (这是一个异步操作)
                 Task {
                     self.log("🔍 正在分析 App 元数据...")
