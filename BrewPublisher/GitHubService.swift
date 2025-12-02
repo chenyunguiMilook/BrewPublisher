@@ -8,6 +8,11 @@
 
 import Foundation
 
+struct GitHubFileContentResponse: Codable {
+    let sha: String
+    let name: String
+}
+
 class GitHubService {
     private let session = URLSession.shared
     
@@ -60,44 +65,57 @@ class GitHubService {
     
     // 3. 更新或创建 Formula 文件
     func updateFile(token: String, tapRepo: String, path: String, content: String, message: String) async throws {
-        // 注意：这里 urlString 变了，不再拼接 "Formula/"，而是直接用传入的 path
-        // path 可能是 "Formula/myapp.rb" 也可能是 "Casks/myapp.rb"
         let urlString = "https://api.github.com/repos/\(tapRepo)/contents/\(path)"
-        
         guard let url = URL(string: urlString) else { throw BrewError.invalidURL }
         
-        // 3.1 检查文件是否存在以获取 SHA (如果存在)
+        // ---------------------------------------------------------
+        // 第一步：尝试 GET 获取文件，看看它是否存在，以及获取它的 SHA
+        // ---------------------------------------------------------
         var existingSha: String? = nil
         
         var getRequest = URLRequest(url: url)
         getRequest.httpMethod = "GET"
         getRequest.addValue("token \(token)", forHTTPHeaderField: "Authorization")
+        // 防止缓存导致获取到旧的 SHA
+        getRequest.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
         
+        // 我们使用 try? 忽略错误，因为如果文件不存在(404)，这里会抛错或返回非200，都是正常的
         if let (data, response) = try? await session.data(for: getRequest),
-           let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            let fileInfo = try? JSONDecoder().decode(GitHubFileResponse.self, from: data)
-            existingSha = fileInfo?.sha
+           let httpResponse = response as? HTTPURLResponse,
+           httpResponse.statusCode == 200 {
+            
+            // 只有当状态码是 200 时，才去解析 SHA
+            if let fileInfo = try? JSONDecoder().decode(GitHubFileContentResponse.self, from: data) {
+                existingSha = fileInfo.sha
+                print("📝 发现旧文件，SHA: \(fileInfo.sha)")
+            }
+        } else {
+            print("🆕 文件不存在，将创建新文件")
         }
         
-        // 3.2 提交文件 (Base64 编码)
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.addValue("token \(token)", forHTTPHeaderField: "Authorization")
+        // ---------------------------------------------------------
+        // 第二步：PUT 提交更新 (新建或覆盖)
+        // ---------------------------------------------------------
+        var putRequest = URLRequest(url: url)
+        putRequest.httpMethod = "PUT"
+        putRequest.addValue("token \(token)", forHTTPHeaderField: "Authorization")
+        putRequest.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let contentBase64 = content.data(using: .utf8)?.base64EncodedString() ?? ""
         
         var body: [String: Any] = [
-            "message": message, // message 也参数化
+            "message": message,
             "content": contentBase64
         ]
         
+        // ⚡️ 关键点：如果找到了旧文件的 SHA，必须带上，否则报 422 错误
         if let sha = existingSha {
             body["sha"] = sha
         }
         
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        putRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: putRequest)
         try validate(response: response, data: data)
     }
     
